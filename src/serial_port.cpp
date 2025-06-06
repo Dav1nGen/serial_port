@@ -1,27 +1,45 @@
 #include "../include/serial_port.hpp"
+// POSIX
 #include <fcntl.h>
 #include <termios.h>
+#include <unistd.h>
+
+// C
+#include <cerrno>
+#include <cstddef>
+#include <cstring>
 
 // STL
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 Serial_port::Serial_port(const std::string config_path)
     : port_name_(""),
       baudrate_(9600),
+      start_bits_(1),
       data_bits_(8),
       stop_bits_(1),
       parity_("N"),
+      timeout_deciseconds_(10),
       fd_(-1),
-      file_reader_(config_path) {}
+      file_reader_(config_path) {
+  try {
+    // Try to read config
+    GetConfiguration();
+  } catch (const std::exception& e) {
+    std::cerr << "Error reading configuration: " << e.what() << std::endl;
+  }
+}
 
-Serial_port::~Serial_port() {
-  if (IsOpen())
-    ::close(fd_);
+Serial_port::~Serial_port() noexcept {
+  Close();
 }
 
 bool Serial_port::Open() {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (IsOpen()) {
     std::cerr << "Port already open" << std::endl;
     return false;
@@ -32,29 +50,58 @@ bool Serial_port::Open() {
   }
 
   std::string port_path = "/dev/" + port_name_;
-  fd_ = ::open(port_path.c_str(), O_RDWR | O_NOCTTY | O_NDELAY);
+  int fd = ::open(port_path.c_str(), O_RDWR | O_NOCTTY);  // block mode
 
-  if (fd_ == -1) {
+  if (fd == -1) {
     throw std::runtime_error("Failed to open " + port_path + ": " +
                              strerror(errno));
   }
+  fd_ = fd;  // ensure fd open successfully
 
-  // Ensure that the port is in non blocking mode
-  fcntl(fd_, F_GETFL, 0); //如何判断数据包完整程度？？？
+  // Try to configure port
+  try {
+    ConfigurePortParameter();
+  } catch (const std::exception& e) {
+    ::close(fd_);
+    fd_ = -1;
+    throw;
+  }
+
   return true;
 }
 
-void Serial_port::Close() {
+void Serial_port::Close() noexcept {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (fd_ >= 0)
     ::close(fd_);
   fd_ = -1;
 }
 
 bool Serial_port::IsOpen() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   return fd_ >= 0;
 }
 
+void Serial_port::GetConfiguration() {
+  // Read config
+  port_name_ = file_reader_.Read<std::string>("port_name");
+  baudrate_ = file_reader_.Read<int>("baudrate");
+  start_bits_ = file_reader_.Read<int>("start_bit");
+  data_bits_ = file_reader_.Read<int>("data_bits");
+  stop_bits_ = file_reader_.Read<int>("stop_bits");
+  parity_ = file_reader_.Read<std::string>("parity");
+  timeout_deciseconds_ = file_reader_.Read<int>("timeout_deciseconds");
+  max_buffer_size_ = file_reader_.Read<int>("max_buffer_size");
+
+  // Verify port name
+  if (port_name_.empty()) {
+    throw std::runtime_error("Port name cannot be empty");
+  }
+}
+
 bool Serial_port::ConfigurePortParameter() {
+  std::lock_guard<std::mutex> lock(mutex_);
+
   if (!IsOpen()) {
     throw std::runtime_error("Port not open");
   }
@@ -64,29 +111,13 @@ bool Serial_port::ConfigurePortParameter() {
     throw std::runtime_error("tcgetattr: " + std::string(strerror(errno)));
   }
 
-  // 设置原始模式 (关键修复)
+  // Set origin mode
   options.c_iflag &= ~(INLCR | IGNCR | ICRNL | IXON | IXOFF);
   options.c_oflag &= ~(OPOST | ONLCR | OCRNL);
   options.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
   options.c_cflag &= ~(CSIZE | PARENB | CSTOPB);
 
-
-  // get parameters from config file
-  port_name_ = file_reader_.Read<std::string>("port_name");
-  baudrate_ = file_reader_.Read<int>("baudrate");
-  data_bits_ = file_reader_.Read<int>("data_bits");
-  stop_bits_ = file_reader_.Read<int>("stop_bits");
-  parity_ = file_reader_.Read<std::string>("parity");
-
-  // set port parameter
-  tcgetattr(fd_, &options);
-
-  // check tcgetattr
-  if (tcgetattr(fd_, &options) != 0) {
-    throw std::runtime_error("tcgetattr failed");
-  }
-
-  // set bundrate
+  // Set bundrate
   speed_t br;
   switch (baudrate_) {
     case 115200:
@@ -124,8 +155,8 @@ bool Serial_port::ConfigurePortParameter() {
   cfsetispeed(&options, br);
   cfsetospeed(&options, br);
 
-  // set data_bit
-  options.c_cflag &= ~CSIZE;  // clear databit config
+  // Set data_bit
+  options.c_cflag &= ~CSIZE;  // Clear databit config
   switch (data_bits_) {
     case 5:
       options.c_cflag |= CS5;
@@ -154,7 +185,7 @@ bool Serial_port::ConfigurePortParameter() {
                              std::to_string(stop_bits_));
   }
 
-  // set parity
+  // Set parity
   if (parity_ == "N") {
     options.c_cflag &= ~PARENB;  // No verification
   } else if (parity_ == "E") {
@@ -167,9 +198,8 @@ bool Serial_port::ConfigurePortParameter() {
     throw std::runtime_error("Invalid parity: " + parity_);
   }
 
-  // Set timeout (important)
-  options.c_cc[VMIN] = 0;   // Minimum Character Count
-  options.c_cc[VTIME] = 10; // timeout (1s)
+  options.c_cc[VMIN] = 0;                      // Minimum Character Count
+  options.c_cc[VTIME] = timeout_deciseconds_;  // Timeout (1s)
 
   // Applicate configuration
   if (tcsetattr(fd_, TCSANOW, &options) != 0) {
@@ -177,4 +207,59 @@ bool Serial_port::ConfigurePortParameter() {
   }
 
   return true;
+}
+
+size_t Serial_port::Write(const uint8_t* data, size_t size) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!IsOpen()) {
+    throw std::runtime_error("Port not open");
+  }
+
+  if (data == nullptr || size == 0) {
+    return 0;
+  }
+
+  // Limit buffer size
+  if (size > max_buffer_size_) {
+    throw std::runtime_error("Write buffer too large, max size is " +
+                             std::to_string(max_buffer_size_));
+  }
+
+  // Write data
+  ssize_t bytes_written = ::write(fd_, data, size);
+  if (bytes_written < 0) {
+    throw std::runtime_error("Write failed: " + std::string(strerror(errno)));
+  }
+
+  return static_cast<size_t>(bytes_written);
+}
+
+std::string Serial_port::Read(size_t max_size) {
+  std::lock_guard<std::mutex> lock(mutex_);  // thread secure
+
+  if (!IsOpen()) {
+    throw std::runtime_error("Port not open");
+  }
+
+  // Limit buffer size
+  if (max_size > max_buffer_size_) {
+    throw std::runtime_error("Read buffer too large, max size is " +
+                             std::to_string(max_buffer_size_));
+  }
+
+  // Create temp buffer
+  std::vector<char> buffer(max_size);
+
+  // Read data
+  ssize_t bytes_read = ::read(fd_, buffer.data(), max_size);
+
+  if (bytes_read < 0) {
+    // Check timeout
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return std::string();  // Timeout,return empty string
+    }
+    throw std::runtime_error("Read failed: " + std::string(strerror(errno)));
+  }
+
+  return std::string(buffer.data(), static_cast<size_t>(bytes_read));
 }

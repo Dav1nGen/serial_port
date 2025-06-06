@@ -1,5 +1,4 @@
 #pragma once
-
 // System
 #include <fcntl.h>
 #include <sys/types.h>
@@ -7,6 +6,7 @@
 #include <unistd.h>
 
 // STL
+#include <mutex>
 #include <string>
 
 // Other
@@ -14,14 +14,19 @@
 
 class Serial_port {
  private:
-  std::string port_name_;  // port_name
-  int baudrate_;           // port baudrate
-  int data_bits_;          // data_bits
-  int stop_bits_;          // stop_bits
-  std::string parity_;     // parity
+  std::string port_name_;    // port_name
+  int baudrate_;             // port baudrate
+  int start_bits_;           // start_bits
+  int data_bits_;            // data_bits
+  int stop_bits_;            // stop_bits
+  std::string parity_;       // parity
+  int timeout_deciseconds_;  // timeout
+  int max_buffer_size_;      // max buffer size
 
   uint fd_;                 // file describe symble
   FileReader file_reader_;  // file reader tool class
+
+  mutable std::mutex mutex_;  // ensure thread secure
 
  public:
   /**
@@ -34,7 +39,7 @@ class Serial_port {
 	 *s @brief Destroy the Serial_port object
 	 * 
 	 */
-  ~Serial_port();
+  ~Serial_port() noexcept;
 
   /**
 	 * @brief Open prot
@@ -48,7 +53,7 @@ class Serial_port {
 	 * @brief Close port
 	 * 
 	 */
-  void Close();
+  void Close() noexcept;
 
   /**
 	 * @brief Judge port whether opened
@@ -59,6 +64,12 @@ class Serial_port {
   bool IsOpen() const;
 
   /**
+   * @brief Get config from config file
+   * 
+   */
+  void GetConfiguration();
+
+  /**
    * @brief Configure port parameter
    * 
    * @return true 
@@ -67,7 +78,7 @@ class Serial_port {
   bool ConfigurePortParameter();
 
   /**
-   * @brief Write data to port
+   * @brief Write data to port,return write size
    * 
    * @param data 
    * @param size 
@@ -76,11 +87,11 @@ class Serial_port {
   size_t Write(const uint8_t* data, size_t size);
 
   /**
-   * @brief Read data from port
+   * @brief Read data from port,return read size
    * 
    * @param buffer 
    * @param max_size 
    * @return size_t 
    */
-  size_t Read(uint8_t* buffer, size_t max_size);
+  std::string Read(size_t max_size);
 };
