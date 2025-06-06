@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-Serial_port::Serial_port(const std::string config_path)
+SerialPort::SerialPort(const std::string config_path)
     : port_name_(""),
       baudrate_(9600),
       start_bits_(1),
@@ -34,11 +34,11 @@ Serial_port::Serial_port(const std::string config_path)
   }
 }
 
-Serial_port::~Serial_port() noexcept {
+SerialPort::~SerialPort() noexcept {
   Close();
 }
 
-bool Serial_port::Open() {
+bool SerialPort::Open() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (IsOpen()) {
     std::cerr << "Port already open" << std::endl;
@@ -70,19 +70,19 @@ bool Serial_port::Open() {
   return true;
 }
 
-void Serial_port::Close() noexcept {
+void SerialPort::Close() noexcept {
   std::lock_guard<std::mutex> lock(mutex_);
   if (fd_ >= 0)
     ::close(fd_);
   fd_ = -1;
 }
 
-bool Serial_port::IsOpen() const {
+bool SerialPort::IsOpen() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return fd_ >= 0;
 }
 
-void Serial_port::GetConfiguration() {
+void SerialPort::GetConfiguration() {
   // Read config
   port_name_ = file_reader_.Read<std::string>("port_name");
   baudrate_ = file_reader_.Read<int>("baudrate");
@@ -99,7 +99,7 @@ void Serial_port::GetConfiguration() {
   }
 }
 
-bool Serial_port::ConfigurePortParameter() {
+bool SerialPort::ConfigurePortParameter() {
   std::lock_guard<std::mutex> lock(mutex_);
 
   if (!IsOpen()) {
@@ -209,7 +209,7 @@ bool Serial_port::ConfigurePortParameter() {
   return true;
 }
 
-size_t Serial_port::Write(const uint8_t* data, size_t size) {
+size_t SerialPort::Write(const uint8_t* data, size_t size) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!IsOpen()) {
     throw std::runtime_error("Port not open");
@@ -234,7 +234,7 @@ size_t Serial_port::Write(const uint8_t* data, size_t size) {
   return static_cast<size_t>(bytes_written);
 }
 
-std::string Serial_port::Read(size_t max_size) {
+std::string SerialPort::Read(size_t max_size) {
   std::lock_guard<std::mutex> lock(mutex_);  // thread secure
 
   if (!IsOpen()) {

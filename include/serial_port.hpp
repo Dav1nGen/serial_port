@@ -12,7 +12,7 @@
 // Other
 #include "file_reader.hpp"
 
-class Serial_port {
+class SerialPort {
  private:
   std::string port_name_;    // port_name
   int baudrate_;             // port baudrate
@@ -30,16 +30,16 @@ class Serial_port {
 
  public:
   /**
-  * @brief Construct a new Serial_port object
+  * @brief Construct a new SerialPort object
   * 
   */
-  explicit Serial_port(const std::string config_path);
+  explicit SerialPort(const std::string config_path);
 
   /**
-	 *s @brief Destroy the Serial_port object
+	 *s @brief Destroy the SerialPort object
 	 * 
 	 */
-  ~Serial_port() noexcept;
+  ~SerialPort() noexcept;
 
   /**
 	 * @brief Open prot
