@@ -3,6 +3,9 @@
 # port_config
 port_name: "ttyUSB0"
 baudrate: 9600
+start_bits: 1
 data_bits: 8
 stop_bits: 1
 parity: "N"
+timeout_deciseconds: 10
+max_buffer_size: 4096

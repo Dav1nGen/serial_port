@@ -1,9 +1,9 @@
 #pragma once
-
 // C++ standard library header file
 #include <assert.h>
 #include <iostream>
 #include <string>
+#include <utility>
 
 // Third-party library headers
 #include <opencv4/opencv2/core.hpp>
@@ -12,7 +12,8 @@
 
 class FileReader {
  public:
-  explicit FileReader(std::string file_path) : file_path_(file_path) {
+  explicit FileReader(const std::string& file_path)
+      : file_path_(file_path), is_open_(false) {
     cv::FileStorage file_storage(file_path_, cv::FileStorage::READ);
 
     if (!file_storage.isOpened()) {
@@ -21,12 +22,22 @@ class FileReader {
       throw std::runtime_error(error_msg);
     }
 
-    this->fs_ = file_storage;
+    fs_ = std::move(file_storage);
+    is_open_ = true;
   }
-  ~FileReader() { this->fs_.release(); }
+
+  ~FileReader() {
+    if (is_open_ && fs_.isOpened()) {
+      fs_.release();
+    }
+  }
 
   template <typename T>
-  T Read(std::string key) {
+  T Read(const std::string& key) {
+    if (!is_open_ || !fs_.isOpened()) {
+      throw std::runtime_error("FileReader is not open");
+    }
+
     const char* cstr = key.c_str();
     if (fs_[cstr].empty()) {
       throw std::runtime_error("Key: \"" + key + "\" not found in the file.");
@@ -39,11 +50,13 @@ class FileReader {
  private:
   const std::string file_path_;
   cv::FileStorage fs_;
+  bool is_open_;
 };
 
 class FileWriter {
  public:
-  explicit FileWriter(std::string file_path) : file_path_(file_path) {
+  explicit FileWriter(const std::string& file_path)
+      : file_path_(file_path), is_open_(false) {
     cv::FileStorage file_storage(file_path_, cv::FileStorage::WRITE);
 
     if (!file_storage.isOpened()) {
@@ -52,11 +65,18 @@ class FileWriter {
       throw std::runtime_error(error_msg);
     }
 
-    this->fs = file_storage;
+    fs_ = std::move(file_storage);
+    is_open_ = true;
   }
-  ~FileWriter() { this->fs.release(); }
-  cv::FileStorage fs;
+
+  ~FileWriter() {
+    if (is_open_ && fs_.isOpened()) {
+      fs_.release();
+    }
+  }
 
  private:
+  cv::FileStorage fs_;
   std::string file_path_;
+  bool is_open_;
 };
