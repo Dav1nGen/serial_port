@@ -1,4 +1,4 @@
-#include "../include/serial_port.hpp"
+#include "serial_port.hpp"
 // POSIX
 #include <fcntl.h>
 #include <termios.h>
@@ -86,7 +86,7 @@ void Serial_port::GetConfiguration() {
   // Read config
   port_name_ = file_reader_.Read<std::string>("port_name");
   baudrate_ = file_reader_.Read<int>("baudrate");
-  start_bits_ = file_reader_.Read<int>("start_bit");
+  start_bits_ = file_reader_.Read<int>("start_bits");
   data_bits_ = file_reader_.Read<int>("data_bits");
   stop_bits_ = file_reader_.Read<int>("stop_bits");
   parity_ = file_reader_.Read<std::string>("parity");
