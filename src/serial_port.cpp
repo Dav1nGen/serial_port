@@ -1,0 +1,240 @@
+#include "serial_port.hpp"
+// POSIX
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+
+// C
+#include <cerrno>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+// STL
+#include <iostream>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+
+// Other
+#include "file_reader.hpp"
+
+SerialPort::SerialPort(const std::string& config_path)
+    : port_name_("ttyUSB0"),
+      baudrate_(19200),
+      start_bits_(1),
+      data_bits_(8),
+      stop_bits_(1),
+      parity_("N"),
+      timeout_deciseconds_(10),
+      fd_(-1),
+      file_reader_(config_path) {
+  try {
+    // Try to read config
+    GetConfiguration();
+  } catch (const std::exception& e) {
+    std::cerr << "Error reading configuration: " << e.what() << "\n";
+  }
+}
+
+SerialPort::~SerialPort() noexcept {
+  Close();
+}
+
+bool SerialPort::Open() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (IsOpen()) {
+    std::cerr << "Port already open"
+              << "\n";
+  }
+
+  if (port_name_.empty()) {
+    throw std::runtime_error("Port name not configured");
+  }
+
+  std::string port_path = "/dev/" + port_name_;
+  int fd = ::open(port_path.c_str(), O_RDWR | O_NOCTTY);  // block mode
+
+  if (fd == -1) {
+    throw std::runtime_error("Failed to open " + port_path + ": " +
+                             strerror(errno));
+  }
+  fd_ = fd;  // ensure fd open successfully
+  return true;
+}
+
+void SerialPort::Close() noexcept {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (fd_ >= 0) {
+    ::close(fd_);
+  }
+
+  fd_ = -1;
+}
+
+bool SerialPort::IsOpen() const {
+  return fd_ >= 0;
+}
+
+void SerialPort::GetConfiguration() {
+  // Read config
+  port_name_ = file_reader_.Read<std::string>("port_name");
+  baudrate_ = file_reader_.Read<int>("baudrate");
+  start_bits_ = file_reader_.Read<int>("start_bits");
+  data_bits_ = file_reader_.Read<int>("data_bits");
+  stop_bits_ = file_reader_.Read<int>("stop_bits");
+  parity_ = file_reader_.Read<std::string>("parity");
+  timeout_deciseconds_ = file_reader_.Read<int>("timeout_deciseconds");
+  max_buffer_size_ = file_reader_.Read<int>("max_buffer_size");
+
+  // Verify port name
+  if (port_name_.empty()) {
+    throw std::runtime_error("Port name cannot be empty");
+  }
+}
+
+bool SerialPort::ConfigurePortParameter() {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  if (!IsOpen()) {
+    throw std::runtime_error("Port not open");
+  }
+
+  struct termios options;
+  if (tcgetattr(fd_, &options) != 0) {
+    throw std::runtime_error("tcgetattr: " + std::string(strerror(errno)));
+  }
+
+  // Set origin mode
+  options.c_iflag &= ~(INLCR | IGNCR | ICRNL | IXON | IXOFF);
+  options.c_oflag &= ~(OPOST | ONLCR | OCRNL);
+  options.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+  options.c_cflag &= ~(CSIZE | PARENB | CSTOPB);
+
+  // Set bundrate
+  speed_t br = B9600;
+  switch (baudrate_) {
+    case 115200:
+      br = B115200;
+      break;
+    case 57600:
+      br = B57600;
+      break;
+    case 38400:
+      br = B38400;
+      break;
+    case 19200:
+      br = B19200;
+      break;
+    case 9600:
+      br = B9600;
+      break;
+    case 4800:
+      br = B4800;
+      break;
+    case 2400:
+      br = B2400;
+      break;
+    case 1800:
+      br = B1800;
+      break;
+    case 1200:
+      br = B1200;
+      break;
+    default:
+      throw std::runtime_error("Unsupported baudrate: " +
+                               std::to_string(baudrate_));
+  }
+
+  cfsetispeed(&options, br);
+  cfsetospeed(&options, br);
+
+  // Set data_bit
+  options.c_cflag &= ~CSIZE;  // Clear databit config
+  switch (data_bits_) {
+    case 5:
+      options.c_cflag |= CS5;
+      break;
+    case 6:
+      options.c_cflag |= CS6;
+      break;
+    case 7:
+      options.c_cflag |= CS7;
+      break;
+    case 8:
+      options.c_cflag |= CS8;
+      break;
+    default:
+      throw std::runtime_error("Invalid data bits: " +
+                               std::to_string(data_bits_));
+  }
+
+  // set stop_bit
+  if (stop_bits_ == 1) {
+    options.c_cflag &= ~CSTOPB;  // 1 stop bit
+  } else if (stop_bits_ == 2) {
+    options.c_cflag |= CSTOPB;  // 2 stop bit
+  } else {
+    throw std::runtime_error("Invalid stop bits: " +
+                             std::to_string(stop_bits_));
+  }
+
+  // Set parity
+  if (parity_ == "N") {
+    options.c_cflag &= ~PARENB;  // No verification
+  } else if (parity_ == "E") {
+    options.c_cflag |= PARENB;  // Even verification
+    options.c_cflag &= ~PARODD;
+  } else if (parity_ == "O") {
+    options.c_cflag |= PARENB;  // Odd parity
+    options.c_cflag |= PARODD;
+  } else {
+    throw std::runtime_error("Invalid parity: " + parity_);
+  }
+
+  options.c_cc[VMIN] = 0;                      // Minimum Character Count
+  options.c_cc[VTIME] = timeout_deciseconds_;  // Timeout (1s)
+
+  // Applicate configuration
+  if (tcsetattr(fd_, TCSANOW, &options) != 0) {
+    throw std::runtime_error("tcsetattr failed");
+  }
+
+  return true;
+}
+
+uint16_t SerialPort::CalculateCRC16(const uint8_t* data, size_t length) {
+  uint16_t crc = 0xFFFF;
+  for (size_t pos = 0; pos < length; pos++) {
+    crc ^= (uint16_t)data[pos];
+    for (int i = 0; i < 8; i++) {
+      crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xA001 : 0x0000);
+    }
+  }
+  return crc;
+}
+
+size_t SerialPort::Write(const uint8_t* data, size_t size) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!IsOpen()) {
+    throw std::runtime_error("Port not open");
+  }
+
+  if (data == nullptr || size == 0) {
+    return 0;
+  }
+
+  // Limit buffer size
+  if (size > max_buffer_size_) {
+    throw std::runtime_error("Write buffer too large, max size is " +
+                             std::to_string(max_buffer_size_));
+  }
+
+  // Write data
+  ssize_t bytes_written = ::write(fd_, data, size);
+  if (bytes_written < 0) {
+    throw std::runtime_error("Write failed: " + std::string(strerror(errno)));
+  }
+
+  return static_cast<size_t>(bytes_written);
+}

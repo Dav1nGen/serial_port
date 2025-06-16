@@ -1,0 +1,11 @@
+%YAML:1.0
+---
+# port_config
+port_name: "ttyUSB0"
+baudrate: 11920
+start_bits: 0
+data_bits: 8
+stop_bits: 1
+parity: "N"
+timeout_deciseconds: 10
+max_buffer_size: 4096
